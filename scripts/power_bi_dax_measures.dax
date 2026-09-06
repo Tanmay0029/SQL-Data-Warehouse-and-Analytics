@@ -1,0 +1,231 @@
+/*
+===============================================================================
+Power BI DAX Measures & Metrics Script
+===============================================================================
+Purpose:
+    This file contains all DAX measure definitions required to build the 
+    Executive, Customer, and Product Power BI dashboards on top of the Gold Layer tables.
+
+Star Schema Model Tables:
+    - gold.fact_sales
+    - gold.dim_customers
+    - gold.dim_products
+    - DateAuto (Calendar Table generated via DAX)
+===============================================================================
+*/
+
+// ============================================================================
+// 0. DATE TABLE CREATION (Calendar Dimension)
+// ============================================================================
+DateTable = 
+VAR MinDate = MIN(fact_sales[order_date])
+VAR MaxDate = MAX(fact_sales[order_date])
+RETURN
+ADDCOLUMNS (
+    CALENDAR(MinDate, MaxDate),
+    "Year", YEAR([Date]),
+    "Month No", MONTH([Date]),
+    "Month Name", FORMAT([Date], "MMM"),
+    "Month Year", FORMAT([Date], "MMM YYYY"),
+    "Quarter", "Q" & FORMAT([Date], "Q"),
+    "Year Quarter", YEAR([Date]) & "-Q" & FORMAT([Date], "Q"),
+    "Day of Week", FORMAT([Date], "ddd"),
+    "Day No", DAY([Date])
+)
+
+
+// ============================================================================
+// 1. BASE MEASURES (Core Aggregations)
+// ============================================================================
+
+// Total Revenue generated from sales
+Total Revenue = 
+SUM ( fact_sales[sales_amount] )
+
+// Total Quantity of items sold
+Total Quantity Sold = 
+SUM ( fact_sales[quantity] )
+
+// Total Number of Orders placed
+Total Orders = 
+DISTINCTCOUNT ( fact_sales[order_number] )
+
+// Total Number of Unique Customers making purchases
+Total Purchasing Customers = 
+DISTINCTCOUNT ( fact_sales[customer_key] )
+
+// Total Customer Base in Data Warehouse
+Total Customers = 
+COUNTROWS ( dim_customers )
+
+// Total Number of Active Products
+Total Products = 
+COUNTROWS ( dim_products )
+
+// Total Cost of Goods Sold (COGS)
+Total COGS = 
+SUMX (
+    fact_sales,
+    fact_sales[quantity] * RELATED ( dim_products[cost] )
+)
+
+// Total Profit (Revenue minus Cost)
+Total Profit = 
+[Total Revenue] - [Total COGS]
+
+// Profit Margin Percentage
+Profit Margin % = 
+DIVIDE ( [Total Profit], [Total Revenue], 0 )
+
+// Average Order Value (AOV)
+Average Order Value = 
+DIVIDE ( [Total Revenue], [Total Orders], 0 )
+
+// Average Selling Price (ASP)
+Average Selling Price = 
+DIVIDE ( [Total Revenue], [Total Quantity Sold], 0 )
+
+
+// ============================================================================
+// 2. TIME INTELLIGENCE & YoY / MoM METRICS (Executive Dashboard)
+// ============================================================================
+
+// Sales in Previous Year (PY)
+Sales PY = 
+CALCULATE (
+    [Total Revenue],
+    SAMEPERIODLASTYEAR ( DateTable[Date] )
+)
+
+// Year-over-Year (YoY) Sales Growth Amount
+YoY Sales Growth = 
+[Total Revenue] - [Sales PY]
+
+// Year-over-Year (YoY) Sales Growth Percentage
+YoY Sales Growth % = 
+DIVIDE ( [YoY Sales Growth], [Sales PY], 0 )
+
+// Orders in Previous Year (PY)
+Orders PY = 
+CALCULATE (
+    [Total Orders],
+    SAMEPERIODLASTYEAR ( DateTable[Date] )
+)
+
+// YoY Orders Growth %
+YoY Orders Growth % = 
+DIVIDE ( [Total Orders] - [Orders PY], [Orders PY], 0 )
+
+// Sales in Previous Month (PM)
+Sales PM = 
+CALCULATE (
+    [Total Revenue],
+    DATEADD ( DateTable[Date], -1, MONTH )
+)
+
+// Month-over-Month (MoM) Sales Growth %
+MoM Sales Growth % = 
+DIVIDE ( [Total Revenue] - [Sales PM], [Sales PM], 0 )
+
+// Cumulative Running Total Revenue
+Running Total Revenue = 
+CALCULATE (
+    [Total Revenue],
+    FILTER (
+        ALLSELECTED ( DateTable ),
+        DateTable[Date] <= MAX ( DateTable[Date] )
+    )
+)
+
+
+// ============================================================================
+// 3. CUSTOMER DASHBOARD MEASURES
+// ============================================================================
+
+// Average Revenue Per Customer (ARPU)
+Avg Revenue Per Customer = 
+DIVIDE ( [Total Revenue], [Total Purchasing Customers], 0 )
+
+// Average Orders Per Customer
+Avg Orders Per Customer = 
+DIVIDE ( [Total Orders], [Total Purchasing Customers], 0 )
+
+// Repeat Customers (Customers with more than 1 order)
+Repeat Customers Count = 
+COUNTROWS (
+    FILTER (
+        VALUES ( fact_sales[customer_key] ),
+        CALCULATE ( DISTINCTCOUNT ( fact_sales[order_number] ) ) > 1
+    )
+)
+
+// Repeat Customer Rate %
+Repeat Customer Rate % = 
+DIVIDE ( [Repeat Customers Count], [Total Purchasing Customers], 0 )
+
+// VIP Customers Count (Spending > $5,000)
+VIP Customers Count = 
+COUNTROWS (
+    FILTER (
+        VALUES ( fact_sales[customer_key] ),
+        CALCULATE ( [Total Revenue] ) > 5000
+    )
+)
+
+// Regular Customers Count (Spending <= $5,000)
+Regular Customers Count = 
+COUNTROWS (
+    FILTER (
+        VALUES ( fact_sales[customer_key] ),
+        CALCULATE ( [Total Revenue] ) <= 5000 && CALCULATE ( [Total Revenue] ) > 0
+    )
+)
+
+
+// ============================================================================
+// 4. PRODUCT DASHBOARD MEASURES
+// ============================================================================
+
+// High-Performer Products (Revenue > $50,000)
+High Performer Products Count = 
+COUNTROWS (
+    FILTER (
+        VALUES ( dim_products[product_key] ),
+        CALCULATE ( [Total Revenue] ) > 50000
+    )
+)
+
+// Mid-Range Products (Revenue between $10,000 and $50,000)
+Mid Range Products Count = 
+COUNTROWS (
+    FILTER (
+        VALUES ( dim_products[product_key] ),
+        CALCULATE ( [Total Revenue] ) >= 10000 && CALCULATE ( [Total Revenue] ) <= 50000
+    )
+)
+
+// Low-Performer Products (Revenue < $10,000)
+Low Performer Products Count = 
+COUNTROWS (
+    FILTER (
+        VALUES ( dim_products[product_key] ),
+        CALCULATE ( [Total Revenue] ) < 10000
+    )
+)
+
+// Category Contribution % to Total Revenue
+Category Revenue Contribution % = 
+DIVIDE (
+    [Total Revenue],
+    CALCULATE ( [Total Revenue], ALL ( dim_products[category] ) ),
+    0
+)
+
+// Top Product Name by Revenue
+Top Product Name = 
+TOPN (
+    1,
+    VALUES ( dim_products[product_name] ),
+    [Total Revenue],
+    DESC
+)
